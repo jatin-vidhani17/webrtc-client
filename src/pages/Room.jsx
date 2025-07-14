@@ -18,9 +18,9 @@ const RoomPage = () => {
         async (data) => {
             const { emailId } = data;
             console.log("New User Joined Room:", emailId);
+            setRemoteEmailId(emailId);
             const offer = await createOffer();
             socket.emit('call-user', { emailId, offer });
-            setRemoteEmailId(emailId);
         },
         [createOffer, socket]
     );
@@ -28,10 +28,10 @@ const RoomPage = () => {
     const handleIncomingCall = useCallback(
         async (data) => {
             const { from, offer } = data;
-            console.log("Incoming Call from", from, offer);
+            console.log("Incoming Call from:", from, offer);
+            setRemoteEmailId(from);
             const ans = await createAnswer(offer);
             socket.emit('call-accepted', { emailId: from, ans });
-            setRemoteEmailId(from);
             if (myStream) {
                 sendStream(myStream);
             }
@@ -51,6 +51,19 @@ const RoomPage = () => {
         [setRemoteAns, sendStream, myStream]
     );
 
+    const handleUserDisconnected = useCallback(
+        (data) => {
+            const { emailId } = data;
+            console.log("User Disconnected:", emailId);
+            if (emailId === remoteEmailId) {
+                setRemoteEmailId(null);
+                setRemoteStream(null);
+                setConnectionState('disconnected');
+            }
+        },
+        [remoteEmailId]
+    );
+
     const getUserMediaStream = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -65,6 +78,7 @@ const RoomPage = () => {
         if (remoteEmailId && peer.signalingState === 'stable') {
             const offer = await createOffer();
             socket.emit('call-user', { emailId: remoteEmailId, offer });
+            console.log("Negotiation needed, offer sent to:", remoteEmailId);
         }
     }, [peer, remoteEmailId, socket, createOffer]);
 
@@ -112,13 +126,15 @@ const RoomPage = () => {
         socket.on("user-joined", handleNewUserJoined);
         socket.on('incomming-call', handleIncomingCall);
         socket.on("call-accepted", handleCallAccepted);
+        socket.on("user-disconnected", handleUserDisconnected);
 
         return () => {
             socket.off("user-joined", handleNewUserJoined);
             socket.off("incomming-call", handleIncomingCall);
             socket.off("call-accepted", handleCallAccepted);
+            socket.off("user-disconnected", handleUserDisconnected);
         };
-    }, [handleNewUserJoined, handleIncomingCall, handleCallAccepted, socket]);
+    }, [handleNewUserJoined, handleIncomingCall, handleCallAccepted, handleUserDisconnected, socket]);
 
     useEffect(() => {
         peer.addEventListener('negotiationneeded', handleNegotiationNeeded);
@@ -158,6 +174,7 @@ const RoomPage = () => {
                                 ref={(video) => {
                                     if (video && myStream) {
                                         video.srcObject = myStream;
+                                        console.log("Local video assigned:", myStream.getTracks());
                                     }
                                 }}
                                 className="w-full h-full object-cover rounded-xl"
