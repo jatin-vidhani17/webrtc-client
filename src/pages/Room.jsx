@@ -7,7 +7,6 @@ import { Video, Mic, VideoOff, MicOff, Monitor } from 'lucide-react';
 const RoomPage = () => {
     const socket = useSocket();
     const { peer, createOffer, createAnswer, setRemoteAns, sendStream, remoteStream } = usePeer();
-
     const [myStream, setMyStream] = useState(null);
     const [remoteEmailId, setRemoteEmailId] = useState(null);
     const [isVideoOn, setIsVideoOn] = useState(true);
@@ -25,19 +24,31 @@ const RoomPage = () => {
         [createOffer, socket]
     );
 
-    const handleIncomingCall = useCallback(async (data) => {
-        const { from, offer } = data;
-        console.log("Incoming Call from", from, offer);
-        const ans = await createAnswer(offer);
-        socket.emit('call-accepted', { emailId: from, ans });
-        setRemoteEmailId(from);
-    }, [createAnswer, socket]);
+    const handleIncomingCall = useCallback(
+        async (data) => {
+            const { from, offer } = data;
+            console.log("Incoming Call from", from, offer);
+            const ans = await createAnswer(offer);
+            socket.emit('call-accepted', { emailId: from, ans });
+            setRemoteEmailId(from);
+            if (myStream) {
+                sendStream(myStream); // Send stream after answering call
+            }
+        },
+        [createAnswer, socket, myStream, sendStream]
+    );
 
-    const handleCallAccepted = useCallback(async (data) => {
-        const { ans } = data;
-        console.log("Call Accepted with answer: ", ans);
-        await setRemoteAns(ans);
-    }, [setRemoteAns]);
+    const handleCallAccepted = useCallback(
+        async (data) => {
+            const { ans } = data;
+            console.log("Call Accepted with answer: ", ans);
+            await setRemoteAns(ans);
+            if (myStream) {
+                sendStream(myStream); // Send stream after call is accepted
+            }
+        },
+        [setRemoteAns, sendStream, myStream]
+    );
 
     const getUserMediaStream = useCallback(async () => {
         try {
@@ -49,20 +60,26 @@ const RoomPage = () => {
     }, []);
 
     const handleNegotiationNeeded = useCallback(async () => {
-        const localOffer = peer.localDescription;
-        socket.emit('call-user', { emailId: remoteEmailId, offer: localOffer });
+        if (remoteEmailId) {
+            const localOffer = peer.localDescription;
+            socket.emit('call-user', { emailId: remoteEmailId, offer: localOffer });
+        }
     }, [peer.localDescription, remoteEmailId, socket]);
 
     const toggleVideo = useCallback(() => {
         if (myStream) {
-            myStream.getVideoTracks()[0].enabled = !isVideoOn;
+            const videoTrack = myStream.getVideoTracks()[0];
+            videoTrack.enabled = !isVideoOn;
+            console.log("Video track enabled:", videoTrack.enabled);
             setIsVideoOn(!isVideoOn);
         }
     }, [myStream, isVideoOn]);
 
     const toggleAudio = useCallback(() => {
         if (myStream) {
-            myStream.getAudioTracks()[0].enabled = !isAudioOn;
+            const audioTrack = myStream.getAudioTracks()[0];
+            audioTrack.enabled = !isAudioOn;
+            console.log("Audio track enabled:", audioTrack.enabled);
             setIsAudioOn(!isAudioOn);
         }
     }, [myStream, isAudioOn]);
@@ -112,16 +129,17 @@ const RoomPage = () => {
         getUserMediaStream();
     }, [getUserMediaStream]);
 
+    useEffect(() => {
+        console.log("Remote stream updated:", remoteStream);
+    }, [remoteStream]);
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex flex-col items-center justify-center p-2 sm:p-4 font-sans backdrop-blur-sm">
             <div className="w-full max-w-6xl bg-gray-850 bg-opacity-90 rounded-2xl shadow-2xl flex flex-col h-[85vh] overflow-hidden border border-gray-700">
-                {/* Header */}
                 <div className="p-4 border-b border-gray-600">
                     <h1 className="text-xl sm:text-2xl font-semibold text-white">Video Meeting</h1>
                     <p className="text-sm text-gray-300">{remoteEmailId ? `With: ${remoteEmailId}` : "Waiting for participants..."}</p>
                 </div>
-
-                {/* Video Grid */}
                 <div className="flex-1 p-4 sm:p-6 overflow-auto">
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4 sm:gap-6">
                         <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
@@ -168,8 +186,6 @@ const RoomPage = () => {
                         )}
                     </div>
                 </div>
-
-                {/* Control Bar */}
                 <div className="p-4 bg-gray-900 bg-opacity-90 flex justify-center items-center space-x-3 sm:space-x-4">
                     <button
                         onClick={toggleVideo}
@@ -208,8 +224,6 @@ const RoomPage = () => {
                         Send Video
                     </button>
                 </div>
-
-                {/* Status Bar */}
                 <div className="p-2 bg-gray-850 text-xs sm:text-sm text-gray-300 flex justify-between border-t border-gray-600">
                     <span>My Stream: {myStream ? <span className="text-green-400">Active</span> : <span className="text-red-400">Inactive</span>}</span>
                     <span>Remote Stream: {remoteStream ? <span className="text-green-400">Active</span> : <span className="text-red-400">Inactive</span>}</span>
@@ -217,6 +231,6 @@ const RoomPage = () => {
             </div>
         </div>
     );
-}
+};
 
 export default RoomPage;
