@@ -12,11 +12,12 @@ const RoomPage = () => {
     const [isVideoOn, setIsVideoOn] = useState(true);
     const [isAudioOn, setIsAudioOn] = useState(true);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
+    const [connectionState, setConnectionState] = useState('disconnected');
 
     const handleNewUserJoined = useCallback(
         async (data) => {
             const { emailId } = data;
-            console.log("New User Joined Room: ", emailId);
+            console.log("New User Joined Room:", emailId);
             const offer = await createOffer();
             socket.emit('call-user', { emailId, offer });
             setRemoteEmailId(emailId);
@@ -32,7 +33,7 @@ const RoomPage = () => {
             socket.emit('call-accepted', { emailId: from, ans });
             setRemoteEmailId(from);
             if (myStream) {
-                sendStream(myStream); // Send stream after answering call
+                sendStream(myStream);
             }
         },
         [createAnswer, socket, myStream, sendStream]
@@ -41,10 +42,10 @@ const RoomPage = () => {
     const handleCallAccepted = useCallback(
         async (data) => {
             const { ans } = data;
-            console.log("Call Accepted with answer: ", ans);
+            console.log("Call Accepted with answer:", ans);
             await setRemoteAns(ans);
             if (myStream) {
-                sendStream(myStream); // Send stream after call is accepted
+                sendStream(myStream);
             }
         },
         [setRemoteAns, sendStream, myStream]
@@ -54,17 +55,18 @@ const RoomPage = () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             setMyStream(stream);
+            console.log("Local stream acquired:", stream.getTracks());
         } catch (error) {
             console.error("Error accessing media devices:", error);
         }
     }, []);
 
     const handleNegotiationNeeded = useCallback(async () => {
-        if (remoteEmailId) {
-            const localOffer = peer.localDescription;
-            socket.emit('call-user', { emailId: remoteEmailId, offer: localOffer });
+        if (remoteEmailId && peer.signalingState === 'stable') {
+            const offer = await createOffer();
+            socket.emit('call-user', { emailId: remoteEmailId, offer });
         }
-    }, [peer.localDescription, remoteEmailId, socket]);
+    }, [peer, remoteEmailId, socket, createOffer]);
 
     const toggleVideo = useCallback(() => {
         if (myStream) {
@@ -120,8 +122,13 @@ const RoomPage = () => {
 
     useEffect(() => {
         peer.addEventListener('negotiationneeded', handleNegotiationNeeded);
+        peer.addEventListener('connectionstatechange', () => {
+            console.log("Connection state:", peer.connectionState);
+            setConnectionState(peer.connectionState);
+        });
         return () => {
             peer.removeEventListener('negotiationneeded', handleNegotiationNeeded);
+            peer.removeEventListener('connectionstatechange');
         };
     }, [handleNegotiationNeeded, peer]);
 
@@ -130,7 +137,7 @@ const RoomPage = () => {
     }, [getUserMediaStream]);
 
     useEffect(() => {
-        console.log("Remote stream updated:", remoteStream);
+        console.log("Remote stream updated:", remoteStream, remoteStream?.getTracks());
     }, [remoteStream]);
 
     return (
@@ -138,7 +145,9 @@ const RoomPage = () => {
             <div className="w-full max-w-6xl bg-gray-850 bg-opacity-90 rounded-2xl shadow-2xl flex flex-col h-[85vh] overflow-hidden border border-gray-700">
                 <div className="p-4 border-b border-gray-600">
                     <h1 className="text-xl sm:text-2xl font-semibold text-white">Video Meeting</h1>
-                    <p className="text-sm text-gray-300">{remoteEmailId ? `With: ${remoteEmailId}` : "Waiting for participants..."}</p>
+                    <p className="text-sm text-gray-300">
+                        {remoteEmailId ? `With: ${remoteEmailId} (${connectionState})` : "Waiting for participants..."}
+                    </p>
                 </div>
                 <div className="flex-1 p-4 sm:p-6 overflow-auto">
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4 sm:gap-6">
@@ -165,25 +174,30 @@ const RoomPage = () => {
                                 </span>
                             </div>
                         </div>
-                        {remoteStream && (
-                            <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
+                        <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
+                            {remoteStream ? (
                                 <video
                                     autoPlay
                                     ref={(video) => {
                                         if (video && remoteStream) {
                                             video.srcObject = remoteStream;
+                                            console.log("Remote video assigned:", remoteStream.getTracks());
                                         }
                                     }}
                                     className="w-full h-full object-cover rounded-xl"
                                     aria-label="Remote video stream"
                                 />
-                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-2">
-                                    <span className="text-sm text-white font-medium">
-                                        {remoteEmailId}
-                                    </span>
+                            ) : (
+                                <div className="flex items-center justify-center h-full text-gray-400">
+                                    {remoteEmailId ? "Waiting for remote stream..." : "No remote user"}
                                 </div>
-                            </div>
-                        )}
+                            )}
+                            {remoteEmailId && (
+                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-2">
+                                    <span className="text-sm text-white font-medium">{remoteEmailId}</span>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
                 <div className="p-4 bg-gray-900 bg-opacity-90 flex justify-center items-center space-x-3 sm:space-x-4">
@@ -215,9 +229,16 @@ const RoomPage = () => {
                         <Monitor className="w-4 h-4 sm:w-5 sm:h-5" />
                     </button>
                     <button
-                        onClick={() => sendStream(myStream)}
-                        disabled={!myStream}
-                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold text-white transition-all duration-200 ${myStream ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-600 cursor-not-allowed'}`}
+                        onClick={() => {
+                            if (myStream && connectionState === 'connected') {
+                                sendStream(myStream);
+                                console.log("Stream sent:", myStream.getTracks());
+                            } else {
+                                console.warn("Cannot send stream: No stream or not connected");
+                            }
+                        }}
+                        disabled={!myStream || connectionState !== 'connected'}
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold text-white transition-all duration-200 ${myStream && connectionState === 'connected' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-600 cursor-not-allowed'}`}
                         aria-label="Send video stream"
                         title="Send video stream"
                     >
@@ -225,8 +246,9 @@ const RoomPage = () => {
                     </button>
                 </div>
                 <div className="p-2 bg-gray-850 text-xs sm:text-sm text-gray-300 flex justify-between border-t border-gray-600">
-                    <span>My Stream: {myStream ? <span className="text-green-400">Active</span> : <span className="text-red-400">Inactive</span>}</span>
-                    <span>Remote Stream: {remoteStream ? <span className="text-green-400">Active</span> : <span className="text-red-400">Inactive</span>}</span>
+                    <span>My Stream: {myStream ? <span className="text-green-400">Active ({myStream.getTracks().length} tracks)</span> : <span className="text-red-400">Inactive</span>}</span>
+                    <span>Remote Stream: {remoteStream ? <span className="text-green-400">Active ({remoteStream.getTracks().length} tracks)</span> : <span className="text-red-400">Inactive</span>}</span>
+                    <span>Connection: <span className={connectionState === 'connected' ? 'text-green-400' : 'text-red-400'}>{connectionState}</span></span>
                 </div>
             </div>
         </div>
