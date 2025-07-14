@@ -70,7 +70,6 @@ export const PeerProvider = (props) => {
             return;
         }
         try {
-            // Remove existing tracks to avoid duplicates
             const senders = peer.getSenders();
             for (const sender of senders) {
                 peer.removeTrack(sender);
@@ -97,16 +96,16 @@ export const PeerProvider = (props) => {
 
     const handleIceCandidate = useCallback((event) => {
         if (event.candidate) {
-            console.log("ICE candidate generated:", event.candidate);
+            console.log("ICE candidate generated:", event.candidate.candidate);
             socket.emit('ice-candidate', { candidate: event.candidate });
         }
     }, [socket]);
 
     const handleReceiveIceCandidate = useCallback(
-        (data) => {
+        async (data) => {
             try {
-                peer.addIceCandidate(new RTCIceCandidate(data.candidate));
-                console.log("ICE candidate added:", data.candidate);
+                await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
+                console.log("ICE candidate added:", data.candidate.candidate);
             } catch (err) {
                 console.error("Error adding ICE candidate:", err);
             }
@@ -119,9 +118,14 @@ export const PeerProvider = (props) => {
         peer.addEventListener('icecandidate', handleIceCandidate);
         socket.on('ice-candidate', handleReceiveIceCandidate);
 
+        peer.addEventListener('iceconnectionstatechange', () => {
+            console.log("ICE connection state:", peer.iceConnectionState);
+        });
+
         return () => {
             peer.removeEventListener('track', handleTrackEvent);
             peer.removeEventListener('icecandidate', handleIceCandidate);
+            peer.removeEventListener('iceconnectionstatechange');
             socket.off('ice-candidate', handleReceiveIceCandidate);
         };
     }, [handleTrackEvent, handleIceCandidate, handleReceiveIceCandidate, peer, socket]);
