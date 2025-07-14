@@ -13,10 +13,12 @@ export const useSocket = () => {
 
 export const SocketProvider = (props) => {
     const socket = useMemo(
-        ()=>
-         io('https://webrtc-server-cczj.onrender.com/8001'),
-    []
-);
+        () => io('https://webrtc-server-cczj.onrender.com', {
+            transports: ['websocket', 'polling'], // Allow both transports
+            withCredentials: true // Enable credentials if needed
+        }),
+        []
+    );
     return (
         <SocketContext.Provider value={socket}>
             {props.children}
