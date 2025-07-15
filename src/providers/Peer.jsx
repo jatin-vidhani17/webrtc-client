@@ -26,11 +26,13 @@ export const PeerProvider = (props) => {
                             "stun:global.stun.twilio.com:3478",
                         ],
                     },
-                    // Replace with your own TURN server credentials
                     {
-                        urls: "turn:turn.example.com:3478",
-                        username: "username",
-                        credential: "password",
+                        urls: [
+                            "turn:openrelay.metered.ca:80",
+                            "turn:openrelay.metered.ca:443",
+                        ],
+                        username: "openrelayproject",
+                        credential: "openrelayproject",
                     },
                 ],
             }),
