@@ -6,7 +6,7 @@ const PeerContext = React.createContext(null);
 export const usePeer = () => {
     const peer = React.useContext(PeerContext);
     if (!peer) {
-        throw new Error('usePeer must be used within a PeerProvider');
+        throw new Error("usePeer must be used within a PeerProvider");
     }
     return peer;
 };
@@ -14,16 +14,28 @@ export const usePeer = () => {
 export const PeerProvider = (props) => {
     const socket = useSocket();
     const [remoteStream, setRemoteStream] = useState(null);
-    const peer = useMemo(() => new RTCPeerConnection({
-        iceServers: [
-            {
-                urls: [
-                    "stun:stun.l.google.com:19302",
-                    "stun:global.stun.twilio.com:3478",
-                ]
-            }
-        ],
-    }), []);
+    const pendingIceCandidates = useMemo(() => [], []);
+
+    const peer = useMemo(
+        () =>
+            new RTCPeerConnection({
+                iceServers: [
+                    {
+                        urls: [
+                            "stun:stun.l.google.com:19302",
+                            "stun:global.stun.twilio.com:3478",
+                        ],
+                    },
+                    // Note: Replace with your own TURN server credentials
+                    {
+                        urls: "turn:turn.example.com:3478", // Placeholder TURN server
+                        username: "username",
+                        credential: "password",
+                    },
+                ],
+            }),
+        []
+    );
 
     const createOffer = async () => {
         try {
@@ -65,7 +77,7 @@ export const PeerProvider = (props) => {
             console.warn("No stream provided to sendStream");
             return;
         }
-        if (peer.connectionState !== 'connected' && peer.connectionState !== 'stable') {
+        if (peer.connectionState !== "connected" && peer.connectionState !== "stable") {
             console.warn("Peer connection not ready:", peer.connectionState);
             return;
         }
@@ -80,7 +92,7 @@ export const PeerProvider = (props) => {
                 console.log("Track added:", track.kind, track.id);
             }
         } catch (err) {
-            console.error("Error adding stream:", err);
+            console.error("Error sending stream:", err);
         }
     };
 
@@ -94,18 +106,26 @@ export const PeerProvider = (props) => {
         }
     }, []);
 
-    const handleIceCandidate = useCallback((event) => {
-        if (event.candidate) {
-            console.log("ICE candidate generated:", event.candidate.candidate);
-            socket.emit('ice-candidate', { candidate: event.candidate });
-        }
-    }, [socket]);
+    const handleIceCandidate = useCallback(
+        (event) => {
+            if (event.candidate) {
+                console.log("ICE candidate generated:", event.candidate.candidate);
+                socket.emit("ice-candidate", { candidate: event.candidate });
+            }
+        },
+        [socket]
+    );
 
     const handleReceiveIceCandidate = useCallback(
         async (data) => {
             try {
-                await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
-                console.log("ICE candidate added:", data.candidate.candidate);
+                if (peer.remoteDescription) {
+                    await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    console.log("ICE candidate added:", data.candidate.candidate);
+                } else {
+                    pendingIceCandidates.push(data.candidate);
+                    console.log("Buffered ICE candidate:", data.candidate.candidate);
+                }
             } catch (err) {
                 console.error("Error adding ICE candidate:", err);
             }
@@ -114,19 +134,34 @@ export const PeerProvider = (props) => {
     );
 
     useEffect(() => {
-        peer.addEventListener('track', handleTrackEvent);
-        peer.addEventListener('icecandidate', handleIceCandidate);
-        socket.on('ice-candidate', handleReceiveIceCandidate);
+        const applyPendingCandidates = async () => {
+            if (peer.remoteDescription && pendingIceCandidates.length > 0) {
+                for (const candidate of pendingIceCandidates) {
+                    try {
+                        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+                        console.log("Applied buffered ICE candidate:", candidate.candidate);
+                    } catch (err) {
+                        console.error("Error applying buffered ICE candidate:", err);
+                    }
+                }
+                pendingIceCandidates.length = 0;
+            }
+        };
 
-        peer.addEventListener('iceconnectionstatechange', () => {
+        peer.addEventListener("track", handleTrackEvent);
+        peer.addEventListener("icecandidate", handleIceCandidate);
+        peer.addEventListener("signalingstatechange", applyPendingCandidates);
+        peer.addEventListener("iceconnectionstatechange", () => {
             console.log("ICE connection state:", peer.iceConnectionState);
         });
+        socket.on("ice-candidate", handleReceiveIceCandidate);
 
         return () => {
-            peer.removeEventListener('track', handleTrackEvent);
-            peer.removeEventListener('icecandidate', handleIceCandidate);
-            peer.removeEventListener('iceconnectionstatechange');
-            socket.off('ice-candidate', handleReceiveIceCandidate);
+            peer.removeEventListener("track", handleTrackEvent);
+            peer.removeEventListener("icecandidate", handleIceCandidate);
+            peer.removeEventListener("signalingstatechange", applyPendingCandidates);
+            peer.removeEventListener("iceconnectionstatechange");
+            socket.off("ice-candidate", handleReceiveIceCandidate);
         };
     }, [handleTrackEvent, handleIceCandidate, handleReceiveIceCandidate, peer, socket]);
 
