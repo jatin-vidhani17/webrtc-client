@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState } from "react";
+import React, { useEffect, useCallback, useState, useRef } from "react";
 import "../index.css";
 import { useSocket } from "../providers/Socket";
 import { usePeer } from "../providers/Peer";
@@ -13,6 +13,9 @@ const RoomPage = () => {
     const [isAudioOn, setIsAudioOn] = useState(true);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [connectionState, setConnectionState] = useState("disconnected");
+    const [error, setError] = useState(null);
+    const localVideoRef = useRef(null);
+    const remoteVideoRef = useRef(null);
 
     const handleNewUserJoined = useCallback(
         async (data) => {
@@ -20,8 +23,13 @@ const RoomPage = () => {
             console.log("New User Joined Room:", emailId);
             setRemoteEmailId(emailId);
             if (peer.signalingState === "stable") {
-                const offer = await createOffer();
-                socket.emit("call-user", { emailId, offer });
+                try {
+                    const offer = await createOffer();
+                    socket.emit("call-user", { emailId, offer });
+                } catch (err) {
+                    console.error("Error creating offer:", err);
+                    setError("Failed to initiate call");
+                }
             } else {
                 console.warn("Peer not in stable state, delaying offer");
             }
@@ -34,12 +42,17 @@ const RoomPage = () => {
             const { from, offer } = data;
             console.log("Incoming Call from:", from, offer);
             setRemoteEmailId(from);
-            const ans = await createAnswer(offer);
-            socket.emit("call-accepted", { emailId: from, ans });
-            if (myStream) {
-                await sendStream(myStream);
-            } else {
-                console.warn("No local stream available to send");
+            try {
+                const ans = await createAnswer(offer);
+                socket.emit("call-accepted", { emailId: from, ans });
+                if (myStream) {
+                    await sendStream(myStream);
+                } else {
+                    console.warn("No local stream available to send");
+                }
+            } catch (err) {
+                console.error("Error handling incoming call:", err);
+                setError("Failed to accept call");
             }
         },
         [createAnswer, socket, myStream, sendStream]
@@ -49,11 +62,16 @@ const RoomPage = () => {
         async (data) => {
             const { ans } = data;
             console.log("Call Accepted with answer:", ans);
-            await setRemoteAns(ans);
-            if (myStream) {
-                await sendStream(myStream);
-            } else {
-                console.warn("No local stream available to send");
+            try {
+                await setRemoteAns(ans);
+                if (myStream) {
+                    await sendStream(myStream);
+                } else {
+                    console.warn("No local stream available to send");
+                }
+            } catch (err) {
+                console.error("Error handling call accepted:", err);
+                setError("Failed to set call answer");
             }
         },
         [setRemoteAns, sendStream, myStream]
@@ -79,46 +97,60 @@ const RoomPage = () => {
             await sendStream(stream);
         } catch (error) {
             console.error("Error accessing media devices:", error);
-            if (error.name === "NotAllowedError") {
-                alert("Please grant camera and microphone permissions to join the call.");
-            } else {
-                alert("Unable to access media devices. Please check your camera and microphone.");
-            }
+            setError(
+                error.name === "NotAllowedError"
+                    ? "Please grant camera and microphone permissions"
+                    : "Unable to access media devices"
+            );
         }
     }, [sendStream]);
 
     const handleNegotiationNeeded = useCallback(async () => {
         if (remoteEmailId) {
-            const offer = await createOffer();
-            socket.emit("call-user", { emailId: remoteEmailId, offer });
-            console.log("Negotiation needed, offer sent to:", remoteEmailId);
+            try {
+                const offer = await createOffer();
+                socket.emit("call-user", { emailId: remoteEmailId, offer });
+                console.log("Negotiation needed, offer sent to:", remoteEmailId);
+            } catch (err) {
+                console.error("Error during negotiation:", err);
+                setError("Failed to renegotiate connection");
+            }
         }
     }, [peer, remoteEmailId, socket, createOffer]);
 
     const toggleVideo = useCallback(() => {
         if (myStream) {
             const videoTrack = myStream.getVideoTracks()[0];
-            videoTrack.enabled = !isVideoOn;
-            console.log("Video track enabled:", videoTrack.enabled);
-            setIsVideoOn(!isVideoOn);
+            if (videoTrack) {
+                videoTrack.enabled = !isVideoOn;
+                console.log("Video track enabled:", videoTrack.enabled);
+                setIsVideoOn(!isVideoOn);
+            }
         }
     }, [myStream, isVideoOn]);
 
     const toggleAudio = useCallback(() => {
         if (myStream) {
             const audioTrack = myStream.getAudioTracks()[0];
-            audioTrack.enabled = !isAudioOn;
-            console.log("Audio track enabled:", audioTrack.enabled);
-            setIsAudioOn(!isAudioOn);
+            if (audioTrack) {
+                audioTrack.enabled = !isAudioOn;
+                console.log("Audio track enabled:", audioTrack.enabled);
+                setIsAudioOn(!isAudioOn);
+            }
         }
     }, [myStream, isAudioOn]);
 
     const toggleScreenShare = useCallback(async () => {
         if (isScreenSharing) {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            setMyStream(stream);
-            await sendStream(stream);
-            setIsScreenSharing(false);
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                setMyStream(stream);
+                await sendStream(stream);
+                setIsScreenSharing(false);
+            } catch (err) {
+                console.error("Error switching to camera:", err);
+                setError("Failed to switch back to camera");
+            }
         } else {
             try {
                 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
@@ -126,16 +158,36 @@ const RoomPage = () => {
                 await sendStream(stream);
                 setIsScreenSharing(true);
                 stream.getVideoTracks()[0].onended = async () => {
-                    const newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                    setMyStream(newStream);
-                    await sendStream(newStream);
-                    setIsScreenSharing(false);
+                    try {
+                        const newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                        setMyStream(newStream);
+                        await sendStream(newStream);
+                        setIsScreenSharing(false);
+                    } catch (err) {
+                        console.error("Error restoring camera after screen share:", err);
+                        setError("Failed to restore camera");
+                    }
                 };
             } catch (error) {
                 console.error("Error starting screen share:", error);
+                setError("Failed to start screen sharing");
             }
         }
     }, [isScreenSharing, sendStream]);
+
+    useEffect(() => {
+        const handleConnectionStateChange = () => {
+            console.log("Connection state:", peer.connectionState);
+            setConnectionState(peer.connectionState);
+        };
+
+        peer.addEventListener("negotiationneeded", handleNegotiationNeeded);
+        peer.addEventListener("connectionstatechange", handleConnectionStateChange);
+        return () => {
+            peer.removeEventListener("negotiationneeded", handleNegotiationNeeded);
+            peer.removeEventListener("connectionstatechange", handleConnectionStateChange);
+        };
+    }, [handleNegotiationNeeded, peer]);
 
     useEffect(() => {
         socket.on("user-joined", handleNewUserJoined);
@@ -152,36 +204,39 @@ const RoomPage = () => {
     }, [handleNewUserJoined, handleIncomingCall, handleCallAccepted, handleUserDisconnected, socket]);
 
     useEffect(() => {
-        peer.addEventListener("negotiationneeded", handleNegotiationNeeded);
-        peer.addEventListener("connectionstatechange", () => {
-            console.log("Connection state:", peer.connectionState);
-            setConnectionState(peer.connectionState);
-        });
-        return () => {
-            peer.removeEventListener("negotiationneeded", handleNegotiationNeeded);
-            peer.removeEventListener("connectionstatechange");
-        };
-    }, [handleNegotiationNeeded, peer]);
-
-    useEffect(() => {
         getUserMediaStream();
     }, [getUserMediaStream]);
 
     useEffect(() => {
-        const videoElement = document.getElementById("local-video");
-        if (videoElement && myStream) {
-            videoElement.srcObject = myStream;
+        if (localVideoRef.current && myStream) {
+            localVideoRef.current.srcObject = myStream;
             console.log("Local video updated:", myStream.getTracks());
         }
     }, [myStream]);
 
     useEffect(() => {
-        const videoElement = document.getElementById("remote-video");
-        if (videoElement && remoteStream) {
-            videoElement.srcObject = remoteStream;
+        if (remoteVideoRef.current && remoteStream) {
+            remoteVideoRef.current.srcObject = remoteStream;
             console.log("Remote video updated:", remoteStream.getTracks());
         }
     }, [remoteStream]);
+
+    if (error) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
+                <div className="text-center">
+                    <h1 className="text-2xl font-semibold">Error</h1>
+                    <p>{error}</p>
+                    <button
+                        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                        onClick={() => window.location.reload()}
+                    >
+                        Retry
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex flex-col items-center justify-center p-2 sm:p-4 font-sans backdrop-blur-sm">
@@ -196,7 +251,7 @@ const RoomPage = () => {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4 sm:gap-6">
                         <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
                             <video
-                                id="local-video"
+                                ref={localVideoRef}
                                 autoPlay
                                 muted
                                 className="w-full h-full object-cover rounded-xl"
@@ -216,7 +271,7 @@ const RoomPage = () => {
                         <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
                             {remoteStream ? (
                                 <video
-                                    id="remote-video"
+                                    ref={remoteVideoRef}
                                     autoPlay
                                     className="w-full h-full object-cover rounded-xl"
                                     aria-label="Remote video stream"
