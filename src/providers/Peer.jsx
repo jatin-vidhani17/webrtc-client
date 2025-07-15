@@ -26,9 +26,9 @@ export const PeerProvider = (props) => {
                             "stun:global.stun.twilio.com:3478",
                         ],
                     },
-                    // Note: Replace with your own TURN server credentials
+                    // Replace with your own TURN server credentials
                     {
-                        urls: "turn:turn.example.com:3478", // Placeholder TURN server
+                        urls: "turn:turn.example.com:3478",
                         username: "username",
                         credential: "password",
                     },
@@ -133,6 +133,10 @@ export const PeerProvider = (props) => {
         [peer]
     );
 
+    const handleIceConnectionStateChange = useCallback(() => {
+        console.log("ICE connection state:", peer.iceConnectionState);
+    }, [peer]);
+
     useEffect(() => {
         const applyPendingCandidates = async () => {
             if (peer.remoteDescription && pendingIceCandidates.length > 0) {
@@ -151,19 +155,17 @@ export const PeerProvider = (props) => {
         peer.addEventListener("track", handleTrackEvent);
         peer.addEventListener("icecandidate", handleIceCandidate);
         peer.addEventListener("signalingstatechange", applyPendingCandidates);
-        peer.addEventListener("iceconnectionstatechange", () => {
-            console.log("ICE connection state:", peer.iceConnectionState);
-        });
+        peer.addEventListener("iceconnectionstatechange", handleIceConnectionStateChange);
         socket.on("ice-candidate", handleReceiveIceCandidate);
 
         return () => {
             peer.removeEventListener("track", handleTrackEvent);
             peer.removeEventListener("icecandidate", handleIceCandidate);
             peer.removeEventListener("signalingstatechange", applyPendingCandidates);
-            peer.removeEventListener("iceconnectionstatechange");
+            peer.removeEventListener("iceconnectionstatechange", handleIceConnectionStateChange);
             socket.off("ice-candidate", handleReceiveIceCandidate);
         };
-    }, [handleTrackEvent, handleIceCandidate, handleReceiveIceCandidate, peer, socket]);
+    }, [handleTrackEvent, handleIceCandidate, handleReceiveIceCandidate, handleIceConnectionStateChange, peer, socket]);
 
     return (
         <PeerContext.Provider value={{ peer, createOffer, createAnswer, setRemoteAns, sendStream, remoteStream }}>
