@@ -2,7 +2,7 @@ import React, { useEffect, useCallback, useState } from "react";
 import "../index.css";
 import { useSocket } from "../providers/Socket";
 import { usePeer } from "../providers/Peer";
-import { Video, Mic, VideoOff, MicOff, Monitor } from 'lucide-react';
+import { Video, Mic, VideoOff, MicOff, Monitor } from "lucide-react";
 
 const RoomPage = () => {
     const socket = useSocket();
@@ -12,17 +12,21 @@ const RoomPage = () => {
     const [isVideoOn, setIsVideoOn] = useState(true);
     const [isAudioOn, setIsAudioOn] = useState(true);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
-    const [connectionState, setConnectionState] = useState('disconnected');
+    const [connectionState, setConnectionState] = useState("disconnected");
 
     const handleNewUserJoined = useCallback(
         async (data) => {
             const { emailId } = data;
             console.log("New User Joined Room:", emailId);
             setRemoteEmailId(emailId);
-            const offer = await createOffer();
-            socket.emit('call-user', { emailId, offer });
+            if (peer.signalingState === "stable") {
+                const offer = await createOffer();
+                socket.emit("call-user", { emailId, offer });
+            } else {
+                console.warn("Peer not in stable state, delaying offer");
+            }
         },
-        [createOffer, socket]
+        [createOffer, socket, peer]
     );
 
     const handleIncomingCall = useCallback(
@@ -31,9 +35,11 @@ const RoomPage = () => {
             console.log("Incoming Call from:", from, offer);
             setRemoteEmailId(from);
             const ans = await createAnswer(offer);
-            socket.emit('call-accepted', { emailId: from, ans });
+            socket.emit("call-accepted", { emailId: from, ans });
             if (myStream) {
-                sendStream(myStream);
+                await sendStream(myStream);
+            } else {
+                console.warn("No local stream available to send");
             }
         },
         [createAnswer, socket, myStream, sendStream]
@@ -45,7 +51,9 @@ const RoomPage = () => {
             console.log("Call Accepted with answer:", ans);
             await setRemoteAns(ans);
             if (myStream) {
-                sendStream(myStream);
+                await sendStream(myStream);
+            } else {
+                console.warn("No local stream available to send");
             }
         },
         [setRemoteAns, sendStream, myStream]
@@ -57,8 +65,7 @@ const RoomPage = () => {
             console.log("User Disconnected:", emailId);
             if (emailId === remoteEmailId) {
                 setRemoteEmailId(null);
-                setRemoteStream(null);
-                setConnectionState('disconnected');
+                setConnectionState("disconnected");
             }
         },
         [remoteEmailId]
@@ -69,15 +76,21 @@ const RoomPage = () => {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             setMyStream(stream);
             console.log("Local stream acquired:", stream.getTracks());
+            await sendStream(stream);
         } catch (error) {
             console.error("Error accessing media devices:", error);
+            if (error.name === "NotAllowedError") {
+                alert("Please grant camera and microphone permissions to join the call.");
+            } else {
+                alert("Unable to access media devices. Please check your camera and microphone.");
+            }
         }
-    }, []);
+    }, [sendStream]);
 
     const handleNegotiationNeeded = useCallback(async () => {
-        if (remoteEmailId && peer.signalingState === 'stable') {
+        if (remoteEmailId) {
             const offer = await createOffer();
-            socket.emit('call-user', { emailId: remoteEmailId, offer });
+            socket.emit("call-user", { emailId: remoteEmailId, offer });
             console.log("Negotiation needed, offer sent to:", remoteEmailId);
         }
     }, [peer, remoteEmailId, socket, createOffer]);
@@ -104,47 +117,49 @@ const RoomPage = () => {
         if (isScreenSharing) {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             setMyStream(stream);
-            sendStream(stream);
+            await sendStream(stream);
             setIsScreenSharing(false);
         } else {
             try {
                 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
                 setMyStream(stream);
-                sendStream(stream);
+                await sendStream(stream);
                 setIsScreenSharing(true);
-                stream.getVideoTracks()[0].onended = () => {
-                    getUserMediaStream();
+                stream.getVideoTracks()[0].onended = async () => {
+                    const newStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    setMyStream(newStream);
+                    await sendStream(newStream);
                     setIsScreenSharing(false);
                 };
             } catch (error) {
                 console.error("Error starting screen share:", error);
             }
         }
-    }, [isScreenSharing, getUserMediaStream, sendStream]);
+    }, [isScreenSharing, sendStream]);
 
     useEffect(() => {
         socket.on("user-joined", handleNewUserJoined);
-        socket.on('incomming-call', handleIncomingCall);
+        socket.on("incoming-call", handleIncomingCall);
         socket.on("call-accepted", handleCallAccepted);
         socket.on("user-disconnected", handleUserDisconnected);
 
         return () => {
             socket.off("user-joined", handleNewUserJoined);
-            socket.off("incomming-call", handleIncomingCall);
+            socket.off("incoming-call", handleIncomingCall);
             socket.off("call-accepted", handleCallAccepted);
             socket.off("user-disconnected", handleUserDisconnected);
         };
     }, [handleNewUserJoined, handleIncomingCall, handleCallAccepted, handleUserDisconnected, socket]);
 
     useEffect(() => {
-        peer.addEventListener('negotiationneeded', handleNegotiationNeeded);
-        peer.addEventListener('connectionstatechange', () => {
+        peer.addEventListener("negotiationneeded", handleNegotiationNeeded);
+        peer.addEventListener("connectionstatechange", () => {
             console.log("Connection state:", peer.connectionState);
             setConnectionState(peer.connectionState);
         });
         return () => {
-            peer.removeEventListener('negotiationneeded', handleNegotiationNeeded);
-            peer.removeEventListener('connectionstatechange');
+            peer.removeEventListener("negotiationneeded", handleNegotiationNeeded);
+            peer.removeEventListener("connectionstatechange");
         };
     }, [handleNegotiationNeeded, peer]);
 
@@ -153,7 +168,19 @@ const RoomPage = () => {
     }, [getUserMediaStream]);
 
     useEffect(() => {
-        console.log("Remote stream updated:", remoteStream, remoteStream?.getTracks());
+        const videoElement = document.getElementById("local-video");
+        if (videoElement && myStream) {
+            videoElement.srcObject = myStream;
+            console.log("Local video updated:", myStream.getTracks());
+        }
+    }, [myStream]);
+
+    useEffect(() => {
+        const videoElement = document.getElementById("remote-video");
+        if (videoElement && remoteStream) {
+            videoElement.srcObject = remoteStream;
+            console.log("Remote video updated:", remoteStream.getTracks());
+        }
     }, [remoteStream]);
 
     return (
@@ -169,14 +196,9 @@ const RoomPage = () => {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4 sm:gap-6">
                         <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
                             <video
+                                id="local-video"
                                 autoPlay
                                 muted
-                                ref={(video) => {
-                                    if (video && myStream) {
-                                        video.srcObject = myStream;
-                                        console.log("Local video assigned:", myStream.getTracks());
-                                    }
-                                }}
                                 className="w-full h-full object-cover rounded-xl"
                                 aria-label="Your video stream"
                             />
@@ -194,13 +216,8 @@ const RoomPage = () => {
                         <div className="relative w-full max-w-[360px] sm:max-w-[400px] aspect-video bg-gray-900 rounded-xl overflow-hidden mx-auto transition-transform duration-200 hover:scale-105 hover:shadow-lg">
                             {remoteStream ? (
                                 <video
+                                    id="remote-video"
                                     autoPlay
-                                    ref={(video) => {
-                                        if (video && remoteStream) {
-                                            video.srcObject = remoteStream;
-                                            console.log("Remote video assigned:", remoteStream.getTracks());
-                                        }
-                                    }}
                                     className="w-full h-full object-cover rounded-xl"
                                     aria-label="Remote video stream"
                                 />
@@ -221,7 +238,9 @@ const RoomPage = () => {
                     <button
                         onClick={toggleVideo}
                         disabled={!myStream}
-                        className={`p-2 sm:p-3 rounded-full transition-all duration-200 ${isVideoOn ? 'bg-gray-700 hover:bg-gray-600' : 'bg-red-600 hover:bg-red-700'} text-white`}
+                        className={`p-2 sm:p-3 rounded-full transition-all duration-200 ${
+                            isVideoOn ? "bg-gray-700 hover:bg-gray-600" : "bg-red-600 hover:bg-red-700"
+                        } text-white`}
                         aria-label={isVideoOn ? "Turn off video" : "Turn on video"}
                         title={isVideoOn ? "Turn off video" : "Turn on video"}
                     >
@@ -230,7 +249,9 @@ const RoomPage = () => {
                     <button
                         onClick={toggleAudio}
                         disabled={!myStream}
-                        className={`p-2 sm:p-3 rounded-full transition-all duration-200 ${isAudioOn ? 'bg-gray-700 hover:bg-gray-600' : 'bg-red-600 hover:bg-red-700'} text-white`}
+                        className={`p-2 sm:p-3 rounded-full transition-all duration-200 ${
+                            isAudioOn ? "bg-gray-700 hover:bg-gray-600" : "bg-red-600 hover:bg-red-700"
+                        } text-white`}
                         aria-label={isAudioOn ? "Turn off audio" : "Turn on audio"}
                         title={isAudioOn ? "Turn off audio" : "Turn on audio"}
                     >
@@ -239,7 +260,9 @@ const RoomPage = () => {
                     <button
                         onClick={toggleScreenShare}
                         disabled={!myStream}
-                        className={`p-2 sm:p-3 rounded-full transition-all duration-200 ${isScreenSharing ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-700 hover:bg-gray-600'} text-white`}
+                        className={`p-2 sm:p-3 rounded-full transition-all duration-200 ${
+                            isScreenSharing ? "bg-green-600 hover:bg-green-700" : "bg-gray-700 hover:bg-gray-600"
+                        } text-white`}
                         aria-label={isScreenSharing ? "Stop sharing screen" : "Share screen"}
                         title={isScreenSharing ? "Stop sharing screen" : "Share screen"}
                     >
@@ -247,15 +270,17 @@ const RoomPage = () => {
                     </button>
                     <button
                         onClick={() => {
-                            if (myStream && connectionState === 'connected') {
+                            if (myStream && connectionState === "connected") {
                                 sendStream(myStream);
                                 console.log("Stream sent:", myStream.getTracks());
                             } else {
                                 console.warn("Cannot send stream: No stream or not connected");
                             }
                         }}
-                        disabled={!myStream || connectionState !== 'connected'}
-                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold text-white transition-all duration-200 ${myStream && connectionState === 'connected' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-600 cursor-not-allowed'}`}
+                        disabled={!myStream || connectionState !== "connected"}
+                        className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold text-white transition-all duration-200 ${
+                            myStream && connectionState === "connected" ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-600 cursor-not-allowed"
+                        }`}
                         aria-label="Send video stream"
                         title="Send video stream"
                     >
@@ -263,9 +288,25 @@ const RoomPage = () => {
                     </button>
                 </div>
                 <div className="p-2 bg-gray-850 text-xs sm:text-sm text-gray-300 flex justify-between border-t border-gray-600">
-                    <span>My Stream: {myStream ? <span className="text-green-400">Active ({myStream.getTracks().length} tracks)</span> : <span className="text-red-400">Inactive</span>}</span>
-                    <span>Remote Stream: {remoteStream ? <span className="text-green-400">Active ({remoteStream.getTracks().length} tracks)</span> : <span className="text-red-400">Inactive</span>}</span>
-                    <span>Connection: <span className={connectionState === 'connected' ? 'text-green-400' : 'text-red-400'}>{connectionState}</span></span>
+                    <span>
+                        My Stream:{" "}
+                        {myStream ? (
+                            <span className="text-green-400">Active ({myStream.getTracks().length} tracks)</span>
+                        ) : (
+                            <span className="text-red-400">Inactive</span>
+                        )}
+                    </span>
+                    <span>
+                        Remote Stream:{" "}
+                        {remoteStream ? (
+                            <span className="text-green-400">Active ({remoteStream.getTracks().length} tracks)</span>
+                        ) : (
+                            <span className="text-red-400">Inactive</span>
+                        )}
+                    </span>
+                    <span>
+                        Connection: <span className={connectionState === "connected" ? "text-green-400" : "text-red-400"}>{connectionState}</span>
+                    </span>
                 </div>
             </div>
         </div>
