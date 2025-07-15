@@ -27,12 +27,9 @@ export const PeerProvider = (props) => {
                         ],
                     },
                     {
-                        urls: [
-                            "turn:openrelay.metered.ca:80",
-                            "turn:openrelay.metered.ca:443",
-                        ],
-                        username: "openrelayproject",
-                        credential: "openrelayproject",
+                        urls: "turn:freestun.net:3478",
+                        username: "free",
+                        credential: "free"
                     },
                 ],
             }),
